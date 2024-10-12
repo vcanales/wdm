@@ -1,6 +1,6 @@
 # wdm-cli
 
-**wdm-cli** is a command-line tool for managing WordPress plugins dependencies. It provides a decentralized alternative that empowers authors with control over where they store their plugins and gives users more granular control over their dependencies. With **wdm-cli**, you can specify exact versions, repositories (including private ones), and manage your WordPress projects' dependencies with greater flexibility.
+**wdm-cli** is a command-line tool for managing WordPress plugins and themes dependencies. It provides a decentralized alternative that empowers authors with control over where they store their plugins and gives users more granular control over their dependencies. With **wdm-cli**, you can specify exact versions, repositories (including private ones), and manage your WordPress projects' dependencies with greater flexibility.
 
 ## Table of Contents
 
@@ -218,23 +218,87 @@ This command removes `private-plugin` from your `wdm.yml` and uninstalls it from
 
 ## Configuration
 
-The main configuration file is `wdm.yml`. Here's an example of what it might look like:
+Below is a table detailing all the supported fields in the `wdm.yml` configuration file for **wdm-cli**, including their default values.
 
-```yaml
-config:
-  wordpress_path: "/path/to/your/wordpress"
-dependencies:
-  - name: custom-plugin
-    version: "1.1.0"
-    repo: yourusername/custom-plugin
-  - name: another-plugin
-    version: "^2.0"
-    repo: anotheruser/another-plugin
-    token_env: WDM_TOKEN_ANOTHER_PLUGIN
-```
+| **Field**                  | **Type** | **Description**                                                                                              | **Required** | **Default Value**                  |
+|----------------------------|----------|--------------------------------------------------------------------------------------------------------------|--------------|------------------------------------|
+| `config`                   | Object   | Contains configuration settings for **wdm-cli**.                                                           | Yes          | N/A                                |
+| `config.wordpress_path`    | String   | Specifies the file system path to your WordPress installation. Defaults to the current directory if not set. | Yes          | Current working directory (`.`)    |
+| `dependencies`             | Array    | Lists all the dependencies (plugins/themes) managed by **wdm-cli**.                                        | Yes          | Empty array `[]`                   |
+| `dependencies[].name`      | String   | The unique name you assign to the dependency.                                                                | Yes          | N/A                                |
+| `dependencies[].version`   | String   | The version of the dependency. Can be an exact version (e.g., `1.8.0`), `latest`, or a version requirement like `^1.0`. | Yes          | N/A                                |
+| `dependencies[].repo`      | String   | The GitHub repository of the dependency in the format `owner/repo`.                                         | Yes          | N/A                                |
+| `dependencies[].token_env` | String   | *(Optional)* The name of the environment variable that contains the GitHub token for accessing private repositories. | No           | N/A                                |
 
-- **`wordpress_path`**: Specifies the path to your WordPress installation.
-- **`dependencies`**: A list of dependencies with their names, versions, repositories, and optional `token_env` for private repositories.
+### Detailed Descriptions
+
+#### 1. `config` Object
+
+- **`wordpress_path`**
+  - **Type:** String
+  - **Description:** Defines the absolute or relative path to your WordPress installation directory. If not specified, **wdm-cli** assumes the current working directory is the WordPress path.
+  - **Required:** Yes
+  - **Default Value:** Current working directory (`.`)
+
+  **Example:**
+  ```yaml
+  config:
+    wordpress_path: "/var/www/html/wordpress"
+  ```
+
+#### 2. `dependencies` Array
+
+Each item in the `dependencies` array represents a plugin or theme that you want to manage with **wdm-cli**.
+
+- **`name`**
+  - **Type:** String
+  - **Description:** A unique identifier for the dependency within your project. This name is used to reference the dependency in **wdm-cli** commands.
+  - **Required:** Yes
+  - **Default Value:** N/A
+
+  **Example:**
+  ```yaml
+  dependencies:
+    - name: custom-plugin
+  ```
+
+- **`version`**
+  - **Type:** String
+  - **Description:** Specifies the version of the dependency to install. It can be:
+    - An exact version number (e.g., `1.8.0`)
+    - `latest` to fetch the most recent version
+    - A semantic version requirement (e.g., `^1.0`)
+  - **Required:** Yes
+  - **Default Value:** N/A
+
+  **Example:**
+  ```yaml
+    - version: "^1.8.0"
+  ```
+
+- **`repo`**
+  - **Type:** String
+  - **Description:** The GitHub repository where the dependency is hosted, formatted as `owner/repo`.
+  - **Required:** Yes
+  - **Default Value:** N/A
+
+  **Example:**
+  ```yaml
+    - repo: yourusername/custom-plugin
+  ```
+
+- **`token_env`**
+  - **Type:** String
+  - **Description:** *(Optional)* The name of the environment variable that holds the GitHub Personal Access Token (PAT) required to access private repositories.
+  - **Required:** No
+  - **Default Value:** N/A
+
+  **Example:**
+  ```yaml
+    - token_env: WDM_TOKEN_CUSTOM_PLUGIN
+  ```
+
+---
 
 ## Examples
 
@@ -295,7 +359,6 @@ Contributions are welcome! Please open an issue or submit a pull request on GitH
 ## License
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
-
 
 **Disclaimer:**
 
