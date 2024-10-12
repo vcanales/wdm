@@ -1,5 +1,6 @@
 [package]
 name = "wdm"
+description = "Decentralized WordPress Plugin Dependency Manager"
 version = "0.1.0"
 authors = ["Vicente Canales <vicente@canales.io>"]
 edition = "2021"
