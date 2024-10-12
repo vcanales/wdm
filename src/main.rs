@@ -10,7 +10,7 @@ use std::process::exit;
 #[derive(Parser)]
 #[command(
     name = "wdm",
-    version = "0.1.0",
+    version = "0.6.0",
     about = "WordPress Dependency Manager"
 )]
 struct Cli {
@@ -32,6 +32,8 @@ enum Commands {
         #[arg(short, long)]
         repo: Option<String>,
     },
+    /// Remove a plugin from the dependencies
+    Remove { plugin_name: String },
     /// Install plugins from wdm.yml
     Install,
 }
@@ -53,7 +55,7 @@ fn default_wordpress_path() -> String {
     ".".to_string()
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, PartialEq)]
 struct Dependency {
     name: String,
     version: String,
@@ -86,6 +88,7 @@ fn main() {
             source,
             repo,
         } => add(plugin_name, version, source, repo),
+        Commands::Remove { plugin_name } => remove(plugin_name),
         Commands::Install => install(),
     }
 }
@@ -135,6 +138,56 @@ fn add(plugin_name: &str, version: &str, source: &str, repo: &Option<String>) {
     println!("Added {} to wdm.yml", plugin_name);
 }
 
+fn remove(plugin_name: &str) {
+    if !Path::new("wdm.yml").exists() {
+        eprintln!("wdm.yml not found.");
+        exit(1);
+    }
+
+    let mut wdm_file: WdmFile =
+        serde_yaml::from_str(&fs::read_to_string("wdm.yml").unwrap()).unwrap();
+
+    let initial_len = wdm_file.dependencies.len();
+    wdm_file.dependencies.retain(|dep| dep.name != *plugin_name);
+
+    if wdm_file.dependencies.len() == initial_len {
+        eprintln!("Plugin {} is not in dependencies.", plugin_name);
+        exit(1);
+    }
+
+    // Update wdm.yml
+    let yaml = serde_yaml::to_string(&wdm_file).unwrap();
+    fs::write("wdm.yml", yaml).expect("Unable to write wdm.yml");
+    println!("Removed {} from wdm.yml", plugin_name);
+
+    // Remove from wdm.lock
+    if Path::new("wdm.lock").exists() {
+        let mut lock_file: WdmLock =
+            serde_yaml::from_str(&fs::read_to_string("wdm.lock").unwrap()).unwrap();
+
+        lock_file
+            .dependencies
+            .retain(|dep| dep.name != *plugin_name);
+
+        let yaml = serde_yaml::to_string(&lock_file).unwrap();
+        fs::write("wdm.lock", yaml).expect("Unable to write wdm.lock");
+    }
+
+    // Uninstall the plugin
+    let wdm_file: WdmFile = serde_yaml::from_str(&fs::read_to_string("wdm.yml").unwrap()).unwrap();
+
+    let wordpress_path = Path::new(&wdm_file.config.wordpress_path);
+    let wp_plugins_dir = wordpress_path.join("wp-content/plugins");
+    let plugin_dir = wp_plugins_dir.join(plugin_name);
+
+    if plugin_dir.exists() {
+        fs::remove_dir_all(&plugin_dir).expect("Failed to remove plugin directory");
+        println!("Uninstalled plugin {}", plugin_name);
+    } else {
+        println!("Plugin directory for {} does not exist.", plugin_name);
+    }
+}
+
 fn install() {
     if !Path::new("wdm.yml").exists() {
         eprintln!("wdm.yml not found. Run 'wdm init' first.");
@@ -174,46 +227,25 @@ fn install() {
 
         println!("Installing {}...", plugin_name);
 
-        let lock_entry = lock_file
+        // Find the entry in the lock file, if it exists
+        let lock_entry_index = lock_file
             .dependencies
             .iter()
-            .find(|e| e.name == plugin_name);
+            .position(|e| e.name == plugin_name);
 
         let resolved_version;
         let checksum;
 
-        if let Some(entry) = lock_entry {
-            // Use locked version and checksum
-            resolved_version = entry.version.clone();
-            checksum = entry.checksum.clone();
-            // Download and install the plugin using locked version
-            if let Some(repo) = repo.clone() {
-                match download_and_install_plugin(
-                    &plugin_name,
-                    &resolved_version,
-                    &source,
-                    &repo,
-                    &wp_plugins_dir,
-                ) {
-                    Ok(calc_checksum) => {
-                        if calc_checksum != checksum {
-                            eprintln!(
-                                "Checksum mismatch for {}. Expected {}, got {}.",
-                                plugin_name, checksum, calc_checksum
-                            );
-                            exit(1);
-                        }
-                    }
-                    Err(err) => {
-                        eprintln!("Failed to install {}: {}", plugin_name, err);
-                        exit(1);
-                    }
-                }
-            } else {
-                eprintln!("Repository not specified for plugin {}", plugin_name);
-                exit(1);
-            }
+        // Determine if we need to update the lock entry
+        let needs_update = if let Some(index) = lock_entry_index {
+            let lock_entry = &lock_file.dependencies[index];
+            // Compare versions
+            lock_entry.version != requested_version
         } else {
+            true // No lock entry exists; needs to be added
+        };
+
+        if needs_update {
             // Resolve version and calculate checksum
             if source == "github" {
                 if let Some(repo) = repo.clone() {
@@ -257,14 +289,54 @@ fn install() {
                 exit(1);
             }
 
-            // Add to lock file
-            lock_file.dependencies.push(LockEntry {
+            // Update lock file
+            let new_lock_entry = LockEntry {
                 name: plugin_name.clone(),
                 version: resolved_version.clone(),
                 checksum: checksum.clone(),
                 source: source.clone(),
                 repo: repo.clone(),
-            });
+            };
+
+            if let Some(index) = lock_entry_index {
+                // Replace existing entry
+                lock_file.dependencies[index] = new_lock_entry;
+            } else {
+                // Add new entry
+                lock_file.dependencies.push(new_lock_entry);
+            }
+        } else {
+            // Use locked version and checksum
+            let lock_entry = &lock_file.dependencies[lock_entry_index.unwrap()];
+            resolved_version = lock_entry.version.clone();
+            checksum = lock_entry.checksum.clone();
+            // Download and install the plugin using locked version
+            if let Some(repo) = repo.clone() {
+                match download_and_install_plugin(
+                    &plugin_name,
+                    &resolved_version,
+                    &source,
+                    &repo,
+                    &wp_plugins_dir,
+                ) {
+                    Ok(calc_checksum) => {
+                        if calc_checksum != checksum {
+                            eprintln!(
+                                "Checksum mismatch for {}. Expected {}, got {}.",
+                                plugin_name, checksum, calc_checksum
+                            );
+                            exit(1);
+                        }
+                    }
+                    Err(err) => {
+                        eprintln!("Failed to install {}: {}", plugin_name, err);
+                        exit(1);
+                    }
+                }
+            } else {
+                eprintln!("Repository not specified for plugin {}", plugin_name);
+                exit(1);
+            }
         }
 
         println!("Installed {} {}", plugin_name, resolved_version);
@@ -289,28 +361,52 @@ fn resolve_github_version(repo: &str, version_req: &str) -> Result<String, Strin
         let mut versions = Vec::new();
         for tag in tags {
             if let Some(name) = tag["name"].as_str() {
-                if let Some(v) = name.strip_prefix('v') {
-                    if let Ok(ver) = Version::parse(v) {
-                        versions.push(ver);
-                    }
+                // Remove any leading 'v' or other prefixes
+                let version_str = name.trim_start_matches(|c: char| !c.is_ascii_digit());
+                if let Ok(ver) = Version::parse(version_str) {
+                    versions.push(ver);
                 }
             }
         }
 
-        let req = VersionReq::parse(version_req).map_err(|e| e.to_string())?;
-        versions.sort();
-        versions.reverse();
-
-        for ver in versions {
-            if req.matches(&ver) {
-                return Ok(ver.to_string());
-            }
+        if versions.is_empty() {
+            return Err("No valid versions found in tags.".to_string());
         }
 
-        Err(format!(
-            "No matching version found for requirement {}",
-            version_req
-        ))
+        // Sort versions in descending order
+        versions.sort_by(|a, b| b.cmp(a));
+
+        // Print the available versions for debugging
+        println!("Available versions: {:?}", versions);
+
+        if version_req == "latest" {
+            // Return the highest version
+            return Ok(versions[0].to_string());
+        } else {
+            // Try to parse as an exact version
+            if let Ok(specific_version) = Version::parse(version_req) {
+                if versions.contains(&specific_version) {
+                    return Ok(specific_version.to_string());
+                } else {
+                    return Err(format!(
+                        "Version {} not found in repository tags",
+                        version_req
+                    ));
+                }
+            } else {
+                // Parse as a version requirement
+                let req = VersionReq::parse(version_req).map_err(|e| e.to_string())?;
+                for ver in &versions {
+                    if req.matches(ver) {
+                        return Ok(ver.to_string());
+                    }
+                }
+                Err(format!(
+                    "No matching version found for requirement {}",
+                    version_req
+                ))
+            }
+        }
     } else {
         Err(format!(
             "Failed to fetch tags from GitHub: HTTP {}",
@@ -326,6 +422,12 @@ fn download_and_install_plugin(
     repo: &str,
     wp_plugins_dir: &Path,
 ) -> Result<String, String> {
+    // Create cache directory
+    let cache_dir = Path::new(".wdm-cache");
+    if !cache_dir.exists() {
+        fs::create_dir_all(&cache_dir).map_err(|e| e.to_string())?;
+    }
+
     // Construct the download URL
     let download_url = match source {
         "github" => format!(
@@ -335,11 +437,25 @@ fn download_and_install_plugin(
         _ => return Err(format!("Unsupported source {}", source)),
     };
 
-    // Download the plugin ZIP
-    let plugin_data = reqwest::blocking::get(&download_url)
-        .map_err(|e| e.to_string())?
-        .bytes()
-        .map_err(|e| e.to_string())?;
+    // Define cache file path
+    let cache_file_name = format!("{}-v{}.zip", plugin_name, version);
+    let cache_file_path = cache_dir.join(&cache_file_name);
+
+    // Check if plugin is in cache
+    if !cache_file_path.exists() {
+        // Download the plugin ZIP
+        println!("Downloading {}...", plugin_name);
+        let plugin_data = reqwest::blocking::get(&download_url)
+            .map_err(|e| e.to_string())?
+            .bytes()
+            .map_err(|e| e.to_string())?;
+
+        // Save to cache
+        fs::write(&cache_file_path, &plugin_data).map_err(|e| e.to_string())?;
+    }
+
+    // Read plugin data from cache
+    let plugin_data = fs::read(&cache_file_path).map_err(|e| e.to_string())?;
 
     // Calculate checksum
     let mut hasher = Sha256::new();
