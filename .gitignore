@@ -3,6 +3,7 @@
 # Development
 wdm.yml
 wdm.lock
+.wdm-cache/
 
 # WordPress
 wp-content/
