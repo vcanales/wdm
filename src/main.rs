@@ -183,7 +183,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 // Check if the dependency is already in the lockfile with the same hash
                 let mut needs_install = true;
-                if let Some(locked_dep) = lockfile
+                if let Some(_locked_dep) = lockfile
                     .dependencies
                     .iter()
                     .find(|d| d.name == dep.name && d.hash == hash)
@@ -199,7 +199,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     for i in 0..zip.len() {
                         let mut file = zip.by_index(i)?;
-                        let outpath = plugin_path.join(file.sanitized_name().strip_prefix(
+                        let outpath = plugin_path.join(file.mangled_name().strip_prefix(
                             format!("{}-{}", dep.repo.split('/').last().unwrap(), version),
                         )?);
 

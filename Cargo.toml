@@ -3,6 +3,8 @@ name = "wdm"
 version = "0.1.0"
 authors = ["Vicente Canales <vicente@canales.io>"]
 edition = "2021"
+license-file = "LICENSE"
+exclude = ["wp-content", "wdm.yml", "wdm.lock", ".wdm-cache"]
 
 [dependencies]
 clap = { version = "4.0", features = ["derive"] }
