@@ -1,5 +1,7 @@
 # wdm-cli
 
+**DISCLAIMER: This project is currently in progress and under active development. Features, documentation, and functionality may change or be incomplete.**
+
 **wdm-cli** is a command-line tool for managing WordPress plugin dependencies. It provides a decentralized alternative that empowers authors with control over where they store their plugins and gives users more granular control over their dependencies. With **wdm-cli**, you can specify exact versions, repositories (including private ones), and manage your WordPress projects' dependencies with greater flexibility.
 
 ## Table of Contents
