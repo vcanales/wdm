@@ -127,7 +127,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             fs::write("wdm.yml", serde_yaml::to_string(&config)?)?;
             println!("Removed {} from wdm.yml", name);
 
-            // Optionally, you can add code to remove the plugin/theme from the wordpress_path
+            // Optionally, you can add code to remove the plugin from the wordpress_path
         }
         Commands::Install => {
             if !Path::new("wdm.yml").exists() {

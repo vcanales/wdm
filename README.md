@@ -1,6 +1,6 @@
 # wdm-cli
 
-**wdm-cli** is a command-line tool for managing WordPress plugins and themes dependencies. It provides a decentralized alternative that empowers authors with control over where they store their plugins and gives users more granular control over their dependencies. With **wdm-cli**, you can specify exact versions, repositories (including private ones), and manage your WordPress projects' dependencies with greater flexibility.
+**wdm-cli** is a command-line tool for managing WordPress plugin dependencies. It provides a decentralized alternative that empowers authors with control over where they store their plugins and gives users more granular control over their dependencies. With **wdm-cli**, you can specify exact versions, repositories (including private ones), and manage your WordPress projects' dependencies with greater flexibility.
 
 ## Table of Contents
 
@@ -24,7 +24,7 @@
 
 ## Features
 
-- **Decentralized Dependency Management**: Authors can store plugins and themes in their own repositories, including private ones, giving them full control.
+- **Decentralized Dependency Management**: Authors can store plugins in their own repositories, including private ones, giving them full control.
 - **Granular Control**: Users can specify exact versions and repositories, allowing for precise dependency management.
 - **Private Repository Support**: Access private GitHub repositories using tokens defined as environment variables.
 - **Multiple Token Support**: Manage multiple private dependencies that require different tokens.
@@ -76,7 +76,7 @@ dependencies: []
 
 ### Adding Dependencies
 
-To add a plugin or theme to your project, use the `add` command:
+To add a plugin to your project, use the `add` command:
 
 ```bash
 wdm add <dependency-name> --version <version> --repo <repository> [--token-env <token-env-variable>]
@@ -248,7 +248,7 @@ Below is a table detailing all the supported fields in the `wdm.yml` configurati
 
 #### 2. `dependencies` Array
 
-Each item in the `dependencies` array represents a plugin or theme that you want to manage with **wdm-cli**.
+Each item in the `dependencies` array represents a plugin that you want to manage with **wdm-cli**.
 
 - **`name`**
   - **Type:** String
