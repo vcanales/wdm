@@ -1,0 +1,8 @@
+/target
+
+# Development
+wdm.yml
+wdm.lock
+
+# WordPress
+wp-content/
