@@ -4,6 +4,7 @@
 wdm.yml
 wdm.lock
 .wdm-cache/
+.vscode/
 
 # WordPress
 wp-content/
