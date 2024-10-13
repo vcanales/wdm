@@ -7,7 +7,8 @@ use serde_yaml;
 use sha2::{Digest, Sha256};
 use std::env;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use zip::ZipArchive;
 
 const DEFAULT_GITHUB_API_BASE_URL: &str = "https://api.github.com";
 
@@ -55,6 +56,9 @@ struct Dependency {
     version: String,
     repo: String,
     token_env: Option<String>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -80,13 +84,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 let config = Config {
                     config: ConfigData {
-                        wordpress_path: None,
+                        wordpress_path: Some(".".to_string()), // Set default to "."
                     },
                     dependencies: Vec::new(),
                 };
                 fs::write("wdm.yml", serde_yaml::to_string(&config)?)?;
                 println!("Initialized wdm.yml");
             }
+            Ok(())
         }
         Commands::Add {
             name,
@@ -99,21 +104,47 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 Config {
                     config: ConfigData {
-                        wordpress_path: None,
+                        wordpress_path: Some(".".to_string()),
                     },
                     dependencies: Vec::new(),
                 }
             };
 
+            // Normalize the name for consistent comparison
+            let normalized_name = name.trim().to_lowercase();
+
+            // Remove any existing dependency with the same normalized name to prevent duplicates
+            let initial_len = config.dependencies.len();
+            config
+                .dependencies
+                .retain(|d| d.name.trim().to_lowercase() != normalized_name);
+
+            let mut dependency_existed = false;
+            if config.dependencies.len() < initial_len {
+                println!(
+                    "Dependency '{}' already exists. Updating its information.",
+                    name
+                );
+                dependency_existed = true;
+            }
+
+            // Add the new or updated dependency
             config.dependencies.push(Dependency {
-                name: name.clone(),
-                version: version.clone(),
-                repo: repo.clone(),
+                name: name.trim().to_string(),
+                version: version.trim().to_string(),
+                repo: repo.trim().to_string(),
                 token_env: token_env.clone(),
+                source: None,
             });
 
+            if dependency_existed {
+                println!("Updated {} in wdm.yml", name);
+            } else {
+                println!("Added {} to wdm.yml", name);
+            }
+
             fs::write("wdm.yml", serde_yaml::to_string(&config)?)?;
-            println!("Added {} to wdm.yml", name);
+            Ok(())
         }
         Commands::Remove { name } => {
             if !Path::new("wdm.yml").exists() {
@@ -122,12 +153,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             let mut config: Config = serde_yaml::from_str(&fs::read_to_string("wdm.yml")?)?;
+            let initial_len = config.dependencies.len();
             config.dependencies.retain(|d| d.name != *name);
 
-            fs::write("wdm.yml", serde_yaml::to_string(&config)?)?;
-            println!("Removed {} from wdm.yml", name);
+            if config.dependencies.len() < initial_len {
+                fs::write("wdm.yml", serde_yaml::to_string(&config)?)?;
+                println!("Removed {} from wdm.yml", name);
+            } else {
+                println!("Dependency '{}' not found in wdm.yml", name);
+            }
 
             // Optionally, you can add code to remove the plugin from the wordpress_path
+            Ok(())
         }
         Commands::Install => {
             if !Path::new("wdm.yml").exists() {
@@ -144,11 +181,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             };
 
+            // Determine the root directory (where wdm.yml is located)
+            let root_dir = resolve_root_dir()?;
+
+            // Ensure that .lock file is at root_dir
+            let lockfile_path = root_dir.join("wdm.lock");
+
+            // Ensure that . directory is at root_dir
+            let cache_dir = root_dir.join(".wdm-cache");
+            if !cache_dir.exists() {
+                fs::create_dir_all(&cache_dir)?;
+            }
+
+            // Set wordpress_path to default to '.' if not specified
             let wordpress_path = if let Some(path) = &config.config.wordpress_path {
                 Path::new(&path).to_path_buf()
             } else {
-                println!("wordpress_path not set in wdm.yml");
-                return Ok(());
+                Path::new(".").to_path_buf()
             };
 
             let client = Client::new();
@@ -164,77 +213,141 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     None
                 };
 
-                let version = resolve_github_version(
+                let version = match resolve_github_version(
                     &client,
                     &github_api_base_url,
                     &dep.repo,
                     &dep.version,
                     token.as_deref(),
-                )?;
+                ) {
+                    Ok(ver) => ver,
+                    Err(e) => {
+                        println!("Error resolving version for {}: {}", dep.name, e);
+                        continue;
+                    }
+                };
 
                 let download_url = format!(
                     "https://github.com/{}/archive/refs/tags/v{}.zip",
                     dep.repo, version
                 );
 
-                let response = download_with_auth(&client, &download_url, token.as_deref())?;
+                let response = match download_with_auth(&client, &download_url, token.as_deref()) {
+                    Ok(data) => data,
+                    Err(e) => {
+                        println!("Error downloading {}: {}", dep.name, e);
+                        continue;
+                    }
+                };
 
-                let hash = format!("{:x}", Sha256::digest(&response));
+                // Define the installation directory inside wp-content/plugins with the plugin's name
+                let plugin_install_dir = wordpress_path.join("wp-content/plugins").join(&dep.name);
 
-                // Check if the dependency is already in the lockfile with the same hash
-                let mut needs_install = true;
-                if let Some(_locked_dep) = lockfile
-                    .dependencies
-                    .iter()
-                    .find(|d| d.name == dep.name && d.hash == hash)
-                {
-                    println!("{} is already up to date", dep.name);
-                    needs_install = false;
+                // Check if the plugin is already installed by verifying the existence of the directory
+                if plugin_install_dir.exists() {
+                    println!(
+                        "{} is already installed in {:?}",
+                        dep.name, plugin_install_dir
+                    );
+                    continue;
                 }
 
-                if needs_install {
-                    // Extract the zip file to the wordpress_path
-                    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(response))?;
-                    let plugin_path = wordpress_path.join("wp-content/plugins");
+                // Save the zip to wdm-cache
+                let cache_plugin_dir = cache_dir.join(format!("{}.zip", dep.name));
+                fs::write(&cache_plugin_dir, &response)?;
+                println!("Saved {} to cache at {:?}", dep.name, cache_plugin_dir);
 
-                    for i in 0..zip.len() {
-                        let mut file = zip.by_index(i)?;
-                        let outpath = plugin_path.join(file.mangled_name().strip_prefix(
-                            format!("{}-{}", dep.repo.split('/').last().unwrap(), version),
-                        )?);
+                // Extract the zip file into the plugin_install_dir
+                let mut zip = match ZipArchive::new(std::io::Cursor::new(&response)) {
+                    Ok(zip) => zip,
+                    Err(e) => {
+                        println!("Error reading zip for {}: {}", dep.name, e);
+                        continue;
+                    }
+                };
 
-                        if file.name().ends_with('/') {
-                            fs::create_dir_all(&outpath)?;
-                        } else {
-                            if let Some(p) = outpath.parent() {
-                                if !p.exists() {
-                                    fs::create_dir_all(&p)?;
-                                }
+                for i in 0..zip.len() {
+                    let mut file = match zip.by_index(i) {
+                        Ok(f) => f,
+                        Err(e) => {
+                            println!("Error accessing file {} in zip: {}", i, e);
+                            continue;
+                        }
+                    };
+                    let outpath = match file.enclosed_name().and_then(|name| {
+                        // Construct the prefix based on repo and version
+                        let repo_name = dep.repo.split('/').last().unwrap();
+                        let prefix = format!("{}-{}", repo_name, version);
+                        name.strip_prefix(prefix.as_str()).ok()
+                    }) {
+                        Some(path) => plugin_install_dir.join(path),
+                        None => {
+                            println!("Invalid file path in zip for {}", dep.name);
+                            continue;
+                        }
+                    };
+
+                    if file.name().ends_with('/') {
+                        if let Err(e) = fs::create_dir_all(&outpath) {
+                            println!("Error creating directory {:?}: {}", outpath, e);
+                            continue;
+                        }
+                    } else {
+                        if let Some(p) = outpath.parent() {
+                            if let Err(e) = fs::create_dir_all(&p) {
+                                println!("Error creating directory {:?}: {}", p, e);
+                                continue;
                             }
-                            let mut outfile = fs::File::create(&outpath)?;
-                            std::io::copy(&mut file, &mut outfile)?;
+                        }
+                        let mut outfile = match fs::File::create(&outpath) {
+                            Ok(f) => f,
+                            Err(e) => {
+                                println!("Error creating file {:?}: {}", outpath, e);
+                                continue;
+                            }
+                        };
+                        if let Err(e) = std::io::copy(&mut file, &mut outfile) {
+                            println!("Error writing to file {:?}: {}", outpath, e);
+                            continue;
                         }
                     }
-
-                    // Update the lockfile
-                    lockfile.dependencies.retain(|d| d.name != dep.name);
-                    lockfile.dependencies.push(LockedDependency {
-                        name: dep.name.clone(),
-                        version: version.clone(),
-                        repo: dep.repo.clone(),
-                        hash,
-                    });
-
-                    println!("Installed {} {}", dep.name, version);
                 }
+
+                // Update the lockfile
+                lockfile.dependencies.retain(|d| d.name != dep.name);
+                lockfile.dependencies.push(LockedDependency {
+                    name: dep.name.clone(),
+                    version: version.clone(),
+                    repo: dep.repo.clone(),
+                    hash: format!("{:x}", Sha256::digest(&response)),
+                });
+
+                println!("Installed {} {}", dep.name, version);
             }
 
-            // Write the updated lockfile
-            fs::write("wdm.lock", serde_yaml::to_string(&lockfile)?)?;
+            // Write the updated lockfile at root_dir
+            fs::write(&lockfile_path, serde_yaml::to_string(&lockfile)?)?;
+            println!("Updated lockfile at {:?}", lockfile_path);
+
+            Ok(())
         }
     }
+}
 
-    Ok(())
+fn resolve_root_dir() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    // Determine the root directory (where wdm.yml is located)
+    let root_dir = Path::new("wdm.yml")
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf();
+
+    // Ensure that wdm-cache directory is at root_dir
+    let cache_dir = root_dir.join(".wdm-cache");
+    if !cache_dir.exists() {
+        fs::create_dir_all(&cache_dir)?;
+    }
+
+    Ok(root_dir)
 }
 
 fn resolve_github_version(
